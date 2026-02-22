@@ -1,0 +1,11 @@
+# Environment secrets
+.env
+
+# PHP session files
+src/tmp_sessions/
+
+# Uploaded files
+src/uploads/
+
+# Temporary chunk data during uploads
+src/tmp_chunks/
