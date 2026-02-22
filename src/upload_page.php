@@ -1,18 +1,22 @@
 <?php
 /* ----------  auth – IP lock, no session hold  ---------- */
-session_save_path(__DIR__ . '/tmp_sessions');
+session_save_path(__DIR__ . "/tmp_sessions");
 session_start();
-include __DIR__ . '/auth.php';
+include __DIR__ . "/auth.php";
 session_write_close();
 
 /* ----------  dirs  ---------- */
-$UPLOAD_DIR = __DIR__ . '/uploads';
-$TMP_DIR    = __DIR__ . '/tmp_chunks';
-if (!is_dir($UPLOAD_DIR)) mkdir($UPLOAD_DIR, 0755, true);
-if (!is_dir($TMP_DIR))    mkdir($TMP_DIR,    0755, true);
+$UPLOAD_DIR = __DIR__ . "/uploads";
+$TMP_DIR = __DIR__ . "/tmp_chunks";
+if (!is_dir($UPLOAD_DIR)) {
+    mkdir($UPLOAD_DIR, 0755, true);
+}
+if (!is_dir($TMP_DIR)) {
+    mkdir($TMP_DIR, 0755, true);
+}
 
 /* ----------  already finished files  ---------- */
-$uploaded_files = array_diff(scandir($UPLOAD_DIR), ['.','..']);
+$uploaded_files = array_diff(scandir($UPLOAD_DIR), [".", ".."]);
 ?>
 <!doctype html>
 <html lang="en">
@@ -54,7 +58,9 @@ a:hover{text-decoration:underline}
   <ul class="file-list" id="uploadedFilesList">
     <?php foreach ($uploaded_files as $f): ?>
     <li>
-      <a href="uploads/<?= urlencode($f) ?>" target="_blank"><?= htmlspecialchars($f) ?></a>
+      <a href="serve.php?file=<?= urlencode(
+          $f,
+      ) ?>" target="_blank"><?= htmlspecialchars($f) ?></a>
       <button class="clear-btn" title="Remove from list">X</button>
     </li>
     <?php endforeach; ?>
