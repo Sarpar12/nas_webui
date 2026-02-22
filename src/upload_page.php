@@ -1,4 +1,7 @@
 <?php
+/* error_reporting(E_ALL); */
+/* ini_set("display_errors", "1"); */
+
 /* ----------  auth – IP lock, no session hold  ---------- */
 session_save_path(__DIR__ . "/tmp_sessions");
 session_start();
@@ -17,6 +20,38 @@ if (!is_dir($TMP_DIR)) {
 
 /* ----------  already finished files  ---------- */
 $uploaded_files = array_diff(scandir($UPLOAD_DIR), [".", ".."]);
+
+/* ----------  read & prune the upload-hash cookie  ---------- */
+$cookie_hashes = [];
+if (!empty($_COOKIE["file_hashes"])) {
+    $decoded = @unserialize($_COOKIE["file_hashes"]);
+    if (is_array($decoded)) {
+        $cookie_hashes = $decoded;
+    }
+}
+
+/* Remove entries for files that no longer exist on disk */
+$pruned = false;
+foreach (array_keys($cookie_hashes) as $name) {
+    if (!in_array($name, $uploaded_files, true)) {
+        unset($cookie_hashes[$name]);
+        $pruned = true;
+    }
+}
+
+/* Write back the pruned cookie — max-age 400 days (browser ceiling) */
+if ($pruned) {
+    $cookie_val = serialize($cookie_hashes);
+    setcookie(
+        "file_hashes",
+        $cookie_val,
+        time() + 34560000,
+        "/",
+        "",
+        true,
+        false,
+    );
+}
 ?>
 <!doctype html>
 <html lang="en">
@@ -34,7 +69,9 @@ button:hover{background:#1e40af}
 .chunk-info{font-size:12px;margin-bottom:8px}
 .speed-log{font-size:11px;font-family:monospace;margin-top:8px;white-space:pre}
 .file-list{text-align:left;margin-top:20px;max-height:300px;overflow-y:auto}
-.file-list li{padding:2px 0}
+.file-list li{padding:4px 0}
+.file-hash{display:block;font-size:10px;font-family:monospace;color:#9ca3af;word-break:break-all;margin-top:1px}
+.file-hash.upload{color:#6ee7b7}
 a{color:#60a5fa;text-decoration:none}
 a:hover{text-decoration:underline}
 .clear-btn{margin-left:8px;color:#fff;background:red;border:none;border-radius:4px;cursor:pointer;padding:2px 6px}
@@ -57,11 +94,21 @@ a:hover{text-decoration:underline}
   <button id="clearAllBtn">Clear All</button>
   <ul class="file-list" id="uploadedFilesList">
     <?php foreach ($uploaded_files as $f): ?>
+    <?php $server_hash = hash_file("sha256", $UPLOAD_DIR . "/" . $f); ?>
+    <?php $upload_hash = $cookie_hashes[$f] ?? null; ?>
     <li>
       <a href="serve.php?file=<?= urlencode(
           $f,
       ) ?>" target="_blank"><?= htmlspecialchars($f) ?></a>
       <button class="clear-btn" title="Remove from list">X</button>
+      <span class="file-hash">SHA-256 (server): <?= $server_hash ?></span>
+      <?php if ($upload_hash): ?>
+      <span class="file-hash upload">SHA-256 (upload): <?= htmlspecialchars(
+          $upload_hash,
+      ) ?></span>
+      <?php else: ?>
+      <span class="file-hash upload">SHA-256 (upload): n/a</span>
+      <?php endif; ?>
     </li>
     <?php endforeach; ?>
   </ul>
@@ -73,6 +120,51 @@ a:hover{text-decoration:underline}
 <script>
 const CHUNK_SIZE = 10 * 1024 * 1024;   // 10 MB
 const PARALLEL   = 4;
+const COOKIE_MAX_AGE = 34560000;        // 400 days in seconds
+
+/* ----------- cuz json_decode() doesn't exist :( ----- */
+function phpSerialize(obj){
+  const keys = Object.keys(obj);
+  let out = `a:${keys.length}:{`;
+  for(const k of keys){
+    const v = obj[k];
+    out += `s:${k.length}:"${k}";s:${v.length}:"${v}";`;
+  }
+  out += '}';
+  return out;
+}
+
+function phpUnserialize(str){
+  const result = {};
+  const regex = /s:(\d+):"(.*?)";s:(\d+):"(.*?)";/g;
+  let match;
+  while((match = regex.exec(str)) !== null){
+    result[match[2]] = match[4];
+  }
+  return result;
+}
+
+/* ----------  cookie helpers  ---------- */
+function getHashCookie(){
+  const m = document.cookie.match(/(?:^|;\s*)file_hashes=([^;]*)/);
+  if(!m) return {};
+  try{
+    return phpUnserialize(decodeURIComponent(m[1]));
+  }catch(e){
+    return {};
+  }
+}
+
+function setHashCookie(obj){
+  const val = encodeURIComponent(phpSerialize(obj));
+  document.cookie = `file_hashes=${val}; path=/; max-age=${COOKIE_MAX_AGE}; secure; samesite=lax`;
+}
+
+function saveFileHash(name, hash){
+  const obj = getHashCookie();
+  obj[name] = hash;
+  setHashCookie(obj);
+}
 
 /* ----------  worker stats  ---------- */
 const stats = Array.from({length: PARALLEL}, (_,id)=>({id, chunk:-1, start:0, bytes:0}));
@@ -89,6 +181,13 @@ setInterval(()=>{
 },1000);
 
 /* ----------  upload core  ---------- */
+/* ----------  client-side SHA-256  ---------- */
+async function hashFile(file){
+  const buf = await file.arrayBuffer();
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
 async function uploadFiles(list){
   const prog = document.getElementById('progress');
   prog.innerHTML = '';
@@ -99,12 +198,19 @@ async function uploadFiles(list){
     const bar  = document.createElement('div'); bar.className='progress-bar';
     wrap.appendChild(bar);
     const info = document.createElement('div'); info.className='chunk-info';
-    info.textContent = `${file.name} — 0 / ${chunks}`;
+    info.textContent = `${file.name} — 0 / ${chunks} — SHA-256: computing…`;
     prog.appendChild(info); prog.appendChild(wrap);
 
     let done = 0;
-    const update = ()=>{ done++; bar.style.width=(done/chunks*100).toFixed(0)+'%';
-                         info.textContent=`${file.name} — ${done} / ${chunks}`; };
+    let fileHash = null;
+    const updateInfo = ()=>{
+      const hashStr = fileHash ? fileHash : 'computing…';
+      info.textContent = `${file.name} — ${done} / ${chunks} — SHA-256: ${hashStr}`;
+    };
+    const update = ()=>{ done++; bar.style.width=(done/chunks*100).toFixed(0)+'%'; updateInfo(); };
+
+    /* start hashing in parallel with upload */
+    const hashPromise = hashFile(file).then(h=>{ fileHash = h; updateInfo(); });
 
     const queue = [];
     for(let i=0;i<chunks;i++){
@@ -130,7 +236,12 @@ async function uploadFiles(list){
         update();
       }
     });
-    await Promise.all(workers);
+    await Promise.all([...workers, hashPromise]);
+
+    /* persist the client-side hash into the cookie */
+    if(fileHash){
+      saveFileHash(file.name, fileHash);
+    }
   }
   const ok = document.createElement('div');
   ok.textContent = 'All uploads finished – reloading…';
