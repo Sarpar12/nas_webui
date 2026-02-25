@@ -52,6 +52,41 @@ if ($pruned) {
         false,
     );
 }
+
+/* ---------- Helper: delete a single file ---------- */
+function delete_file($filename)
+{
+    global $UPLOAD_DIR;
+    $file = $UPLOAD_DIR . "/" . basename($filename); // avoid path traversal
+    if (file_exists($file)) {
+        unlink($file);
+    }
+}
+
+/* ---------- Helper: delete all uploaded files ---------- */
+function delete_all_files()
+{
+    global $UPLOAD_DIR;
+    $files = array_diff(scandir($UPLOAD_DIR), [".", ".."]);
+    foreach ($files as $f) {
+        unlink($UPLOAD_DIR . "/" . $f);
+    }
+}
+
+/* ---------- Handle AJAX POST requests ---------- */
+if ($_SERVER["REQUEST_METHOD"] === "POST") {
+    header("Content-Type: application/json");
+    if (!empty($_POST["delete_file"])) {
+        delete_file($_POST["delete_file"]);
+        echo json_encode(["status" => "ok", "file" => $_POST["delete_file"]]);
+        exit();
+    }
+    if (!empty($_POST["delete_all"])) {
+        delete_all_files();
+        echo json_encode(["status" => "ok"]);
+        exit();
+    }
+}
 ?>
 <!doctype html>
 <html lang="en">
@@ -87,6 +122,11 @@ a:hover{text-decoration:underline}
   <input type="file" id="folderInput" webkitdirectory>
   <div id="progress"></div>
   <div id="speedBox" class="speed-log"></div>
+  <!-- ---------- Search for uploaded files ---------- -->
+  <div style="margin-top:20px; text-align:left;">
+    <label for="fileSearch" style="font-weight:bold; display:block; margin-bottom:4px;">Search Uploaded Files:</label>
+    <input type="text" id="fileSearch" placeholder="Type to filter..." style="width:100%; padding:6px; border-radius:4px; border:1px solid #ccc; background:#1f2937; color:#fff;">
+  </div>
 
   <!--  already-uploaded files  -->
   <?php if ($uploaded_files): ?>
@@ -100,7 +140,9 @@ a:hover{text-decoration:underline}
       <a href="serve.php?file=<?= urlencode(
           $f,
       ) ?>" target="_blank"><?= htmlspecialchars($f) ?></a>
-      <button class="clear-btn" title="Remove from list">X</button>
+      <button class="clear-btn" data-filename="<?= htmlspecialchars(
+          $f,
+      ) ?>" title="Remove from list">X</button>
       <span class="file-hash">SHA-256 (server): <?= $server_hash ?></span>
       <?php if ($upload_hash): ?>
       <span class="file-hash upload">SHA-256 (upload): <?= htmlspecialchars(
@@ -254,6 +296,62 @@ document.getElementById('selFiles').onclick   = ()=>document.getElementById('fil
 document.getElementById('selFolder').onclick  = ()=>document.getElementById('folderInput').click();
 document.getElementById('fileInput').onchange   = e=>uploadFiles(e.target.files);
 document.getElementById('folderInput').onchange = e=>uploadFiles(e.target.files);
+
+/* ---------- Delete single file ---------- */
+document.querySelectorAll('.clear-btn').forEach(btn => {
+    btn.onclick = async (e) => {
+        const filename = btn.dataset.filename;
+        if (!confirm(`Delete "${filename}"?`)) return;
+
+        const form = new FormData();
+        form.append('delete_file', filename);
+
+        try {
+            const res = await fetch('upload_page.php', { method: 'POST', body: form });
+            const data = await res.json();
+            if (data.status === 'ok') {
+                // Remove the file from the list
+                btn.closest('li').remove();
+            }
+        } catch (err) {
+            alert('Failed to delete file.');
+            console.error(err);
+        }
+    };
+});
+
+/* ---------- Delete all files ---------- */
+document.getElementById('clearAllBtn').onclick = async (e) => {
+    if (!confirm('Delete all uploaded files?')) return;
+
+    const form = new FormData();
+    form.append('delete_all', '1');
+
+    try {
+        const res = await fetch('upload_page.php', { method: 'POST', body: form });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            // Clear the file list in the DOM
+            const ul = document.getElementById('uploadedFilesList');
+            if (ul) ul.innerHTML = '';
+        }
+    } catch (err) {
+        alert('Failed to delete all files.');
+        console.error(err);
+    }
+}
+/* ---------- Search / filter uploaded files ---------- */
+const searchInput = document.getElementById('fileSearch');
+searchInput.addEventListener('input', () => {
+    const filter = searchInput.value.toLowerCase();
+    const ul = document.getElementById('uploadedFilesList');
+    if (!ul) return;
+    const items = ul.querySelectorAll('li');
+    items.forEach(li => {
+        const text = li.querySelector('a')?.textContent.toLowerCase() || '';
+        li.style.display = text.includes(filter) ? '' : 'none';
+    });
+});
 </script>
 </body>
 </html>
